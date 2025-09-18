@@ -1,131 +1,170 @@
+// Blog_App/backend/routes/blogRoutes.js
 import express from "express";
+import { body, validationResult } from "express-validator";
 import Blog from "../models/Blog.js";
 import protect from "../middleware/authMiddleware.js";
+import admin from "../middleware/adminMiddleware.js";
+import { isAuthorOrAdmin } from "../utils/permissions.js";
+
 
 const router = express.Router();
 
-// Create Blog
-router.post("/create", protect, async (req, res) => {
-  try {
-    const { title, content } = req.body;
-
-    if (!title || !content) {
-      return res.status(400).json({ message: "Title and content are required" });
-    }
-
-    const newBlog = await Blog.create({
-      title,
-      content,
-      author: req.user._id,  // 👈 store logged-in user as author
-    });
-
-    res.status(201).json(newBlog);
-  } catch (err) {
-    console.error("Error creating blog:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-// GET all blogs
+/**
+ * GET /api/blogs
+ * Query: page, limit, q (search)
+ */
 router.get("/", async (req, res) => {
   try {
-    const blogs = await Blog.find().populate("author", "username email");
-    res.json(blogs);
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit, 10) || 10);
+    const q = req.query.q ? String(req.query.q).trim() : "";
+
+    const filter = q
+      ? {
+          $or: [
+            { title: { $regex: q, $options: "i" } },
+            { content: { $regex: q, $options: "i" } },
+          ],
+        }
+      : {};
+
+    const total = await Blog.countDocuments(filter);
+    const data = await Blog.find(filter)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .populate("author", "username email role");
+
+    return res.json({
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      data,
+    });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("List blogs error:", err);
+    return res.status(500).json({ message: "Server error" });
   }
 });
 
-// Get blogs of logged-in user
-router.get("/myblogs", protect, async (req, res) => {
+/**
+ * GET /api/blogs/all
+ * Admin-only: returns all blogs
+ */
+router.get("/all", protect, admin, async (req, res) => {
   try {
-    const blogs = await Blog.find({ author: req.user._id }).populate("author", "username email");
-    res.json(blogs);
+    const blogs = await Blog.find().sort({ createdAt: -1 }).populate("author", "username email role");
+    return res.json(blogs);
   } catch (err) {
-    res.status(500).json({ message: "Server error" });
+    console.error("Admin get all blogs error:", err);
+    return res.status(500).json({ message: "Server error" });
   }
 });
 
-// GET blog by ID
+/**
+ * POST /api/blogs/create
+ * Create a blog (protected)
+ */
+router.post(
+  "/create",
+  protect,
+  [
+    body("title").isString().isLength({ min: 3 }).withMessage("Title must be at least 3 characters"),
+    body("content").isString().isLength({ min: 10 }).withMessage("Content must be at least 10 characters"),
+  ],
+  async (req, res) => {
+    // Log incoming body for debugging
+    console.log("Incoming create blog request body:", req.body);
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      console.log("Validation errors:", errors.array());
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    try {
+      if (!req.user) return res.status(401).json({ message: "Not authorized" });
+
+      const { title, content, image } = req.body;
+
+      const newBlog = await Blog.create({
+        title,
+        content,
+        image: image || null,
+        author: req.user._id,
+      });
+
+      console.log(`Blog created: ${newBlog._id} by ${req.user.email || req.user._id}`);
+      return res.status(201).json(newBlog);
+    } catch (err) {
+      console.error("Create blog error:", err);
+      return res.status(500).json({ message: "Server error creating blog", detail: err.message });
+    }
+  }
+);
+
+/**
+ * GET /api/blogs/:id
+ * Get single blog
+ */
 router.get("/:id", async (req, res) => {
   try {
-    const blog = await Blog.findById(req.params.id);
+    const id = req.params.id;
+    if (!id || !/^[0-9a-fA-F]{24}$/.test(id)) return res.status(400).json({ message: "Invalid blog id" });
+
+    const blog = await Blog.findById(id).populate("author", "username email role");
     if (!blog) return res.status(404).json({ message: "Blog not found" });
-    res.json(blog);
+
+    return res.json(blog);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("Get blog error:", err);
+    return res.status(500).json({ message: "Server error" });
   }
 });
 
+/* PUT /api/blogs/:id */
+router.put("/:id", protect, [
+  body("title").optional().isString().isLength({ min: 3 }),
+  body("content").optional().isString().isLength({ min: 10 })
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-// @route POST /api/blogs
-router.post("/", protect, async (req, res) => {
-  try {
-    const blog = new Blog({
-      title: req.body.title,
-      content: req.body.content,
-      user: req.user._id
-    });
-    const createdBlog = await blog.save();
-    res.status(201).json(createdBlog);
-  } catch (err) {
-    res.status(500).json({ message: "Server error" });
+  const id = req.params.id;
+  if (!/^[0-9a-fA-F]{24}$/.test(id)) return res.status(400).json({ message: "Invalid id" });
+
+  const blog = await Blog.findById(id);
+  if (!blog) return res.status(404).json({ message: "Blog not found" });
+
+  if (!isAuthorOrAdmin(req.user, blog.author)) {
+    return res.status(403).json({ message: "Forbidden — not author or admin" });
   }
-});
 
-// @route PUT /api/blogs/:id
-// Update Blog
-router.put("/:id", protect, async (req, res) => {
-  try {
-    const blog = await Blog.findById(req.params.id);
+  const { title, content, image } = req.body;
+  if (title) blog.title = title;
+  if (content) blog.content = content;
+  if (image !== undefined) blog.image = image;
 
-    if (!blog) {
-      return res.status(404).json({ message: "Blog not found" });
-    }
-
-    if (!blog.author) {
-      return res.status(400).json({ message: "Blog has no author assigned" });
-    }
-
-    if (blog.author.toString() !== req.user._id.toString()) {
-      return res.status(401).json({ message: "Not authorized to edit this blog" });
-    }
-
-    blog.title = req.body.title || blog.title;
-    blog.content = req.body.content || blog.content;
-
-    const updatedBlog = await blog.save();
-    res.json(updatedBlog);
-  } catch (err) {
-    console.error("Error updating blog:", err); // 👈 log the actual error
-    res.status(500).json({ message: err.message || "Server error" });
-  }
+  await blog.save();
+  return res.json(blog);
 });
 
 
-
-// @route DELETE /api/blogs/:id
-// Delete Blog
+/* DELETE /api/blogs/:id */
 router.delete("/:id", protect, async (req, res) => {
-  try {
-    const blog = await Blog.findById(req.params.id);
+  const id = req.params.id;
+  if (!/^[0-9a-fA-F]{24}$/.test(id)) return res.status(400).json({ message: "Invalid id" });
 
-    if (!blog) {
-      return res.status(404).json({ message: "Blog not found" });
-    }
+  const blog = await Blog.findById(id);
+  if (!blog) return res.status(404).json({ message: "Blog not found" });
 
-    // ✅ Check if logged-in user is the blog's author
-    if (blog.author.toString() !== req.user._id.toString()) {
-      return res.status(401).json({ message: "Not authorized to delete this blog" });
-    }
-
-    await blog.deleteOne();
-    res.json({ message: "Blog removed" });
-
-  } catch (err) {
-    res.status(500).json({ message: "Server error" });
+  if (!isAuthorOrAdmin(req.user, blog.author)) {
+    return res.status(403).json({ message: "Forbidden — not author or admin" });
   }
-});
 
+  await blog.deleteOne();
+  return res.json({ message: "Blog removed" });
+});
 
 export default router;

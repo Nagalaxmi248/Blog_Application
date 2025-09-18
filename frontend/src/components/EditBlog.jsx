@@ -1,101 +1,60 @@
-import React, { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+// src/components/EditBlog.jsx
+import React, { useEffect, useState } from "react";
 import axios from "axios";
+import { useNavigate, useParams } from "react-router-dom";
+import BlogForm from "./BlogForm";
 
 function EditBlog() {
   const { id } = useParams();
-  const navigate = useNavigate();
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
+  const [initial, setInitial] = useState({ title: "", content: "", image: null });
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [message, setMessage] = useState("");
+  const navigate = useNavigate();
+  const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
   useEffect(() => {
     const fetchBlog = async () => {
       try {
-        const token = localStorage.getItem("token");
-        const res = await axios.get(`http://localhost:5000/api/blogs/${id}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        setTitle(res.data.title);
-        setContent(res.data.content);
+        setLoading(true);
+        const res = await axios.get(`${API_BASE}/api/blogs/${id}`);
+        setInitial({ title: res.data.title || "", content: res.data.content || "", image: res.data.image || null });
       } catch (err) {
-        setError(err.response?.data?.message || "❌ Failed to fetch blog");
+        console.error("Failed to load blog for edit:", err);
+        setMessage(err.response?.data?.message || "Failed to load blog");
       } finally {
         setLoading(false);
       }
     };
-    fetchBlog();
+    if (id) fetchBlog();
   }, [id]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-    setSuccess("");
-
+  const handleUpdate = async (form) => {
+    setMessage("");
     try {
       const token = localStorage.getItem("token");
-      await axios.put(
-        `http://localhost:5000/api/blogs/${id}`,
-        { title, content },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      if (!token) { setMessage("Login required"); return; }
+      const payload = { title: form.title, content: form.content };
+      if (form.image) payload.image = form.image;
 
-      setSuccess("✅ Blog updated successfully!");
-      setTimeout(() => navigate("/dashboard"), 1500);
+      const res = await axios.put(`${API_BASE}/api/blogs/${id}`, payload, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      setMessage("Updated successfully");
+      setTimeout(() => navigate(`/blogs/${res.data._id || id}`), 800);
     } catch (err) {
-      setError(err.response?.data?.message || "❌ Failed to update blog");
-    } finally {
-      setLoading(false);
+      console.error("Update error:", err);
+      setMessage(err.response?.data?.message || "Failed to update");
     }
   };
 
-  if (loading) return <div className="text-center mt-5">Loading blog...</div>;
+  if (loading) return <div className="text-center py-5">Loading...</div>;
 
   return (
-    <div className="container d-flex justify-content-center align-items-center vh-100">
-      <div className="card shadow p-4" style={{ width: "600px" }}>
-        <h2 className="text-center mb-4">✏️ Edit Blog</h2>
-
-        {success && <div className="alert alert-success">{success}</div>}
-        {error && <div className="alert alert-danger">{error}</div>}
-
-        <form onSubmit={handleSubmit}>
-          <div className="mb-3">
-            <label className="form-label">Title</label>
-            <input
-              type="text"
-              className="form-control"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              required
-              disabled={loading}
-            />
-          </div>
-
-          <div className="mb-3">
-            <label className="form-label">Content</label>
-            <textarea
-              className="form-control"
-              rows="5"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              required
-              disabled={loading}
-            ></textarea>
-          </div>
-
-          <button
-            type="submit"
-            className="btn btn-warning w-100"
-            disabled={loading}
-          >
-            {loading ? "Updating..." : "Update Blog"}
-          </button>
-        </form>
-      </div>
+    <div className="container py-4">
+      <h2>Edit Blog</h2>
+      {message && <div className="alert alert-info">{message}</div>}
+      <BlogForm onSubmit={handleUpdate} initialData={initial} buttonText="Update" />
     </div>
   );
 }

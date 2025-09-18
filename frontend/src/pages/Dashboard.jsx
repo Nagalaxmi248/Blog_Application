@@ -1,107 +1,130 @@
-import React, { useEffect, useState } from "react";
+// src/pages/Dashboard.jsx
+import React, { useEffect, useState, useRef } from "react";
 import axios from "axios";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
+import BlogCard from "../components/BlogCard";
+import useAuth from "../hooks/useAuth";
 
-function Dashboard() {
-  const [blogs, setBlogs] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+export default function Dashboard() {
+  const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
   const navigate = useNavigate();
+  const { token, user, isAdmin } = useAuth();
 
-  const fetchBlogs = async () => {
+  const [blogs, setBlogs] = useState([]);
+  const [page, setPage] = useState(1);
+  const [limit] = useState(12);
+  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [search, setSearch] = useState("");
+  const debounceRef = useRef(null);
+
+  // fetch ALL blogs (paginated) — admin will be able to edit/delete via permissions on backend
+  const fetchPage = async (p = 1, q = "") => {
+    setLoading(true);
+    setError("");
     try {
-      const token = localStorage.getItem("token");
-      const res = await axios.get("http://localhost:5000/api/blogs/myblogs", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setBlogs(res.data);
+      const res = await axios.get(`${API_BASE}/api/blogs`, { params: { page: p, limit, q } });
+      const payload = res.data || {};
+      const pageData = Array.isArray(payload.data) ? payload.data : [];
+      setBlogs(pageData);
+      setPage(payload.page || p);
+      setTotalPages(payload.totalPages || 1);
     } catch (err) {
-      console.error("Error fetching blogs:", err);
-      setError("Failed to load blogs. Please try again.");
+      console.error("Failed to fetch blogs:", err);
+      setError(err.response?.data?.message || "Failed to load blogs");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchBlogs();
+    fetchPage(1, "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // search debounce
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      fetchPage(1, search.trim());
+    }, 350);
+    return () => clearTimeout(debounceRef.current);
+  }, [search]);
+
+  const handleNew = () => navigate("/create");
+
+  // optimistic delete
   const handleDelete = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this blog?")) return;
+    if (!window.confirm("Delete this post?")) return;
+
+    const prev = blogs;
+    setBlogs((b) => b.filter((x) => x._id !== id));
+    setMessage("");
 
     try {
-      const token = localStorage.getItem("token");
-      await axios.delete(`http://localhost:5000/api/blogs/${id}`, {
+      if (!token) throw new Error("Not authenticated");
+      await axios.delete(`${API_BASE}/api/blogs/${id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      setBlogs(blogs.filter((b) => b._id !== id));
+      setMessage("Deleted");
     } catch (err) {
-      console.error("Delete error:", err);
-      setError("Failed to delete blog.");
+      console.error("Delete failed:", err);
+      setError(err.response?.data?.message || err.message || "Failed to delete");
+      setBlogs(prev); // rollback
     }
   };
 
-  if (loading) {
-    return (
-      <div className="d-flex justify-content-center align-items-center vh-100">
-        <div className="spinner-border text-primary" role="status">
-          <span className="visually-hidden">Loading blogs...</span>
-        </div>
-      </div>
-    );
-  }
+  const handleEdit = (id) => navigate(`/edit/${id}`);
+
+  const goToPage = (p) => {
+    if (p < 1 || p > totalPages) return;
+    fetchPage(p, search);
+  };
 
   return (
-    <div className="container mt-4">
+    <div className="container py-4">
       <div className="d-flex justify-content-between align-items-center mb-3">
-        <h2>My Blogs</h2>
-        <Link to="/blogs/create" className="btn btn-primary">
-          ➕ Create Blog
-        </Link>
+        <h3>All Blogs</h3>
+        <div className="d-flex">
+          <input
+            className="form-control form-control-sm me-2"
+            style={{ width: 260 }}
+            placeholder="Search..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <button className="btn btn-sm btn-success" onClick={handleNew}>New Post</button>
+        </div>
       </div>
 
+      {message && <div className="alert alert-success">{message}</div>}
       {error && <div className="alert alert-danger">{error}</div>}
 
-      {blogs.length === 0 ? (
-        <p className="text-muted text-center">You haven’t written any blogs yet.</p>
+      {loading ? (
+        <div className="text-center py-5">Loading...</div>
+      ) : blogs.length === 0 ? (
+        <div className="alert alert-info">No posts found.</div>
       ) : (
         <div className="row">
-          {blogs.map((blog) => (
-            <div className="col-md-6 col-lg-4 mb-4" key={blog._id}>
-              <div className="card shadow-sm h-100">
-                <div className="card-body d-flex flex-column">
-                  <h5 className="card-title">{blog.title}</h5>
-                  <p className="card-text text-muted">
-                    {blog.content.length > 120
-                      ? blog.content.substring(0, 120) + "..."
-                      : blog.content}
-                  </p>
-                  <div className="mt-auto">
-                    <button
-                      className="btn btn-warning btn-sm me-2"
-                      onClick={() => navigate(`/blogs/edit/${blog._id}`)}
-                    >
-                      ✏ Edit
-                    </button>
-                    <button
-                      className="btn btn-danger btn-sm"
-                      onClick={() => handleDelete(blog._id)}
-                    >
-                      🗑 Delete
-                    </button>
-                  </div>
-                </div>
-                <div className="card-footer text-muted small">
-                  {new Date(blog.createdAt).toLocaleDateString()}
-                </div>
-              </div>
+          {blogs.map((b) => (
+            <div key={b._id} className="col-md-6 mb-3">
+              <BlogCard blog={b} onDelete={handleDelete} />
             </div>
           ))}
         </div>
       )}
+
+      <div className="d-flex justify-content-between align-items-center mt-4">
+        <div>
+          <small className="text-muted">Page {page} of {totalPages}</small>
+        </div>
+        <div>
+          <button className="btn btn-sm btn-outline-secondary me-2" onClick={() => goToPage(page - 1)} disabled={page <= 1}>Prev</button>
+          <button className="btn btn-sm btn-outline-secondary" onClick={() => goToPage(page + 1)} disabled={page >= totalPages}>Next</button>
+        </div>
+      </div>
     </div>
   );
 }
-
-export default Dashboard;

@@ -38,5 +38,5 @@ Designed with **Bootstrap 5** for a responsive, modern UI.
 
 ### 1️⃣ Clone the repository
 ```bash
-git clone https://github.com/yourusername/mern-blog-app.git
-cd mern-blog-app
+git clone https:github.com/Nagalaxmi248/Blog_Application
+cd BLOG-APP
